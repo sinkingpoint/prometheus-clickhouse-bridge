@@ -1,53 +1,39 @@
 package main
 
 import (
-	"io"
-	"net/http"
+	"database/sql"
 
-	"github.com/gogo/protobuf/proto"
-	"github.com/prometheus/prometheus/prompb"
+	"github.com/alecthomas/kong"
+	_ "github.com/mailru/go-clickhouse/v2"
+	"github.com/rs/zerolog/log"
 )
 
+var CLI struct {
+	ClickhouseDSN string `help:"The DSN to connect to Clickhouse with" default:"http://localhost:8123?session_id=promhouse"`
+	Provision     struct {
+	} `cmd:""`
+}
+
 func main() {
+	ctx := kong.Parse(&CLI)
 
-}
+	clickhouseConn, err := sql.Open("chhttp", CLI.ClickhouseDSN)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to connect to Clickhouse")
+		return
+	}
 
-type ProtoPointer[T any] interface {
-	*T
-	proto.Message
-}
+	if err := clickhouseConn.Ping(); err != nil {
+		log.Error().Err(err).Msg("failed to ping Clickhouse")
+		return
+	}
 
-var RemoteReadHandler = ProtoHandler[prompb.ReadRequest, prompb.ReadResponse]
-var RemoteWriteHandler = ProtoHandler[prompb.WriteRequest, prompb.ReadResponse]
-
-func ProtoHandler[Request any, Response any, RequestPtr ProtoPointer[Request], ResponsePtr ProtoPointer[Response]](handler func(req Request) (*Response, error)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		requestBytes, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "failed to read request body", http.StatusBadRequest)
-			return
+	switch ctx.Command() {
+	case "provision":
+		if err := provision(clickhouseConn); err != nil {
+			log.Error().Err(err).Msg("failed provisioning")
 		}
-
-		var readRequest Request
-		if err := proto.Unmarshal(requestBytes, RequestPtr(&readRequest)); err != nil {
-			http.Error(w, "failed to parse request body", http.StatusBadRequest)
-			return
-		}
-
-		readRequestResponse, err := handler(readRequest)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		responseBytes, err := proto.Marshal(ResponsePtr(readRequestResponse))
-		if err != nil {
-			http.Error(w, "failed to marshal response", http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Add("Content-Type", "application/protobuf")
-		w.WriteHeader(http.StatusOK)
-		w.Write(responseBytes)
+	default:
+		panic("BUG: unhandled command: " + ctx.Command())
 	}
 }
