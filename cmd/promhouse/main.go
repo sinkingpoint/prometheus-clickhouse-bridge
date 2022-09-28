@@ -12,6 +12,9 @@ var CLI struct {
 	ClickhouseDSN string `help:"The DSN to connect to Clickhouse with" default:"http://localhost:8123?session_id=promhouse"`
 	Provision     struct {
 	} `cmd:""`
+	Server struct {
+		Listen string `arg:"" default:"0.0.0.0:4278"`
+	} `cmd:""`
 }
 
 func main() {
@@ -32,6 +35,10 @@ func main() {
 	case "provision":
 		if err := provision(clickhouseConn); err != nil {
 			log.Error().Err(err).Msg("failed provisioning")
+		}
+	case "server":
+		if runServer(clickhouseConn, CLI.Server.Listen); err != nil {
+			log.Error().Err(err).Msg("failed running server")
 		}
 	default:
 		panic("BUG: unhandled command: " + ctx.Command())

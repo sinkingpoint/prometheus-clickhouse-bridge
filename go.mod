@@ -9,6 +9,7 @@ require (
 
 require (
 	github.com/gogo/protobuf v1.3.2
+	github.com/gorilla/mux v1.8.0
 	github.com/mailru/go-clickhouse/v2 v2.0.0
 	github.com/rs/zerolog v1.28.0
 )
