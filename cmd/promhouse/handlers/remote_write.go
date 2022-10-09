@@ -2,11 +2,9 @@ package handlers
 
 import (
 	"database/sql"
-	"io"
 	"net/http"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/golang/snappy"
 	ch "github.com/mailru/go-clickhouse/v2"
 	"github.com/prometheus/prometheus/prompb"
 )
@@ -22,26 +20,9 @@ func NewRemoteWriteHandler(conn *sql.DB) *RemoteWriteHandler {
 }
 
 func (h *RemoteWriteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	requestBytes, err := io.ReadAll(r.Body)
+	requestBytes, err := GetDecompressedBody(r)
 	if err != nil {
-		http.Error(w, "failed to read request body", http.StatusBadRequest)
-		return
-	}
-
-	if encoding := r.Header.Get("Content-Encoding"); encoding != "" {
-		switch encoding {
-		case "snappy":
-			decoded, err := snappy.Decode(nil, requestBytes)
-			if err != nil {
-				http.Error(w, "failed to decode snappy", http.StatusBadRequest)
-				return
-			}
-
-			requestBytes = decoded
-		default:
-			http.Error(w, "invalid content-encoding: "+encoding, http.StatusBadRequest)
-			return
-		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
 	}
 
 	var req prompb.WriteRequest
