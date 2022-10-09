@@ -19,7 +19,6 @@ var CLI struct {
 
 func main() {
 	ctx := kong.Parse(&CLI)
-
 	clickhouseConn, err := sql.Open("chhttp", CLI.ClickhouseDSN)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to connect to Clickhouse")

@@ -2,11 +2,12 @@ package handlers
 
 import (
 	"database/sql"
-	"encoding/json"
 	"io"
 	"net/http"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/golang/snappy"
+	ch "github.com/mailru/go-clickhouse/v2"
 	"github.com/prometheus/prometheus/prompb"
 )
 
@@ -27,6 +28,22 @@ func (h *RemoteWriteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if encoding := r.Header.Get("Content-Encoding"); encoding != "" {
+		switch encoding {
+		case "snappy":
+			decoded, err := snappy.Decode(nil, requestBytes)
+			if err != nil {
+				http.Error(w, "failed to decode snappy", http.StatusBadRequest)
+				return
+			}
+
+			requestBytes = decoded
+		default:
+			http.Error(w, "invalid content-encoding: "+encoding, http.StatusBadRequest)
+			return
+		}
+	}
+
 	var req prompb.WriteRequest
 	if err := proto.Unmarshal(requestBytes, &req); err != nil {
 		http.Error(w, "failed to parse request body", http.StatusBadRequest)
@@ -41,18 +58,19 @@ func (h *RemoteWriteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func labelsToJSON(labels []prompb.Label) (string, error) {
+func labelsToJSON(labels []prompb.Label) (string, map[string]string, error) {
 	labelsMap := make(map[string]string)
+	name := ""
 	for _, label := range labels {
+		if label.Name == "__name__" {
+			name = label.Value
+			continue
+		}
+
 		labelsMap[label.Name] = label.Value
 	}
 
-	labelsJSON, err := json.Marshal(labelsMap)
-	if err != nil {
-		return "", err
-	}
-
-	return string(labelsJSON), nil
+	return name, labelsMap, nil
 }
 
 func (h *RemoteWriteHandler) handleRemoteWrite(writeReq prompb.WriteRequest) error {
@@ -61,22 +79,20 @@ func (h *RemoteWriteHandler) handleRemoteWrite(writeReq prompb.WriteRequest) err
 		return err
 	}
 
-	stmt, err := txn.Prepare("INSERT INTO metrics VALUES (?, ?, ?, ?);")
+	stmt, err := txn.Prepare("INSERT INTO metrics (timestamp, name, value, tags) VALUES (?, ?, ?, ?);")
 	if err != nil {
 		return err
 	}
 
 	for i := range writeReq.Timeseries {
-		meta := writeReq.Metadata[i]
 		timeseries := writeReq.Timeseries[i]
-		metricName := meta.MetricFamilyName
-		labels, err := labelsToJSON(timeseries.Labels)
+		name, labels, err := labelsToJSON(timeseries.Labels)
 		if err != nil {
 			return err
 		}
 
 		for _, series := range timeseries.Samples {
-			if _, err := stmt.Exec(series.Timestamp, metricName, series.Value, labels); err != nil {
+			if _, err := stmt.Exec(series.Timestamp, name, series.Value, ch.Map(labels)); err != nil {
 				return err
 			}
 		}

@@ -10,7 +10,6 @@ import (
 
 func runServer(clickhouseConn *sql.DB, listen string) error {
 	router := mux.NewRouter()
-
 	router.Handle("/api/write", handlers.NewRemoteWriteHandler(clickhouseConn)).Methods(http.MethodPost)
 
 	return http.ListenAndServe(listen, router)
