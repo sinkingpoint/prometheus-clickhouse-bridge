@@ -8,3 +8,5 @@ scrape_configs:
 remote_write:
   - url: http://localhost:4278/api/write
   - url: http://localhost:9091/api/v1/write
+remote_read:
+  - url: http://localhost:4278/api/read

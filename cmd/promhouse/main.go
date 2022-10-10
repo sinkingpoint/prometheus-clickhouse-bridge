@@ -9,7 +9,7 @@ import (
 )
 
 var CLI struct {
-	ClickhouseDSN string `help:"The DSN to connect to Clickhouse with" default:"http://localhost:8123?session_id=promhouse"`
+	ClickhouseDSN string `help:"The DSN to connect to Clickhouse with" default:"http://localhost:8123"`
 	Provision     struct {
 	} `cmd:""`
 	Server struct {
