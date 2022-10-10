@@ -73,7 +73,7 @@ func (h *RemoteWriteHandler) handleRemoteWrite(writeReq prompb.WriteRequest) err
 		}
 
 		for _, series := range timeseries.Samples {
-			if _, err := stmt.Exec(series.Timestamp, name, series.Value, ch.Map(labels)); err != nil {
+			if _, err := stmt.Exec(series.Timestamp/1000, name, series.Value, ch.Map(labels)); err != nil {
 				return err
 			}
 		}
