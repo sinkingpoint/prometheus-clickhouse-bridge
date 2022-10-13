@@ -11,10 +11,10 @@ import (
 var CLI struct {
 	ClickhouseDSN string `help:"The DSN to connect to Clickhouse with" default:"http://localhost:8123"`
 	Provision     struct {
-	} `cmd:""`
+	} `cmd:"" help:"Provision the metrics table into a Clickhouse database"`
 	Server struct {
-		Listen string `arg:"" default:"0.0.0.0:4278"`
-	} `cmd:""`
+		Listen string `default:"0.0.0.0:4278"`
+	} `cmd:"" help:"Start the remote Read/Write server"`
 }
 
 func main() {
