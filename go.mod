@@ -1,4 +1,4 @@
-module github.com/sinkingpoint/promhouse
+module github.com/sinkingpoint/prometheus-clickhouse-bridge
 
 go 1.18
 
