@@ -3,4 +3,4 @@ CREATE TABLE IF NOT EXISTS metrics (
     name LowCardinality(String) CODEC(ZSTD),
     tags Map(String, String) CODEC(ZSTD),
     value Float64 CODEC (Gorilla, ZSTD),
-) ENGINE = MergeTree() PRIMARY KEY (timestamp, name, tags);
+) ENGINE = MergeTree() PRIMARY KEY (name, tags, timestamp);
