@@ -1,9 +1,11 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"embed"
 	"io/fs"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
 //go:embed sql/*.sql
@@ -31,25 +33,16 @@ func getProvisionSQLs() ([]string, error) {
 	return sqls, nil
 }
 
-func provision(clickhouseConn *sql.DB) error {
+func provision(conn driver.Conn) error {
 	sqls, err := getProvisionSQLs()
 	if err != nil {
 		return err
 	}
 
-	txn, err := clickhouseConn.Begin()
-	if err != nil {
-		return err
-	}
-
 	for _, sql := range sqls {
-		if _, err := txn.Exec(sql); err != nil {
+		if err := conn.Exec(context.Background(), sql); err != nil {
 			return err
 		}
-	}
-
-	if err = txn.Commit(); err != nil {
-		return err
 	}
 
 	return nil

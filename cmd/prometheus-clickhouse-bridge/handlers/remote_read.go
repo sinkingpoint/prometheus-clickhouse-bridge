@@ -1,13 +1,14 @@
 package handlers
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
 	"github.com/prometheus/common/model"
@@ -16,10 +17,10 @@ import (
 
 // RemoteReadHandler is an http.Handler that processes RemoteRead requests
 type RemoteReadHandler struct {
-	clickhouseConn *sql.DB
+	clickhouseConn driver.Conn
 }
 
-func NewRemoteReadHandler(clickhouseConn *sql.DB) *RemoteReadHandler {
+func NewRemoteReadHandler(clickhouseConn driver.Conn) *RemoteReadHandler {
 	return &RemoteReadHandler{
 		clickhouseConn: clickhouseConn,
 	}
@@ -137,7 +138,7 @@ func (h *RemoteReadHandler) handleRemoteRead(req prompb.ReadRequest) (*prompb.Re
 		whereArgs = append(whereArgs, query.StartTimestampMs/1000, query.EndTimestampMs/1000)
 
 		queryString := fmt.Sprintf("SELECT timestamp, name, tags, value FROM metrics WHERE %s ORDER BY name, tags, timestamp", strings.Join(wheres, " AND "))
-		rows, err := h.clickhouseConn.Query(queryString, whereArgs...)
+		rows, err := h.clickhouseConn.Query(context.Background(), queryString, whereArgs...)
 		if err != nil {
 			return nil, err
 		}

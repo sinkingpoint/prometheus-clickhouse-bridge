@@ -1,19 +1,20 @@
 package handlers
 
 import (
-	"database/sql"
+	"context"
+	"fmt"
 	"net/http"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/gogo/protobuf/proto"
-	ch "github.com/mailru/go-clickhouse/v2"
 	"github.com/prometheus/prometheus/prompb"
 )
 
 type RemoteWriteHandler struct {
-	clickhouseConn *sql.DB
+	clickhouseConn driver.Conn
 }
 
-func NewRemoteWriteHandler(conn *sql.DB) *RemoteWriteHandler {
+func NewRemoteWriteHandler(conn driver.Conn) *RemoteWriteHandler {
 	return &RemoteWriteHandler{
 		clickhouseConn: conn,
 	}
@@ -23,6 +24,7 @@ func (h *RemoteWriteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestBytes, err := GetDecompressedBody(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	var req prompb.WriteRequest
@@ -35,6 +37,8 @@ func (h *RemoteWriteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	fmt.Println("Successfully wrote", len(req.Timeseries), "timeseries")
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -55,15 +59,12 @@ func labelsToJSON(labels []prompb.Label) (string, map[string]string, error) {
 }
 
 func (h *RemoteWriteHandler) handleRemoteWrite(writeReq prompb.WriteRequest) error {
-	txn, err := h.clickhouseConn.Begin()
+	batch, err := h.clickhouseConn.PrepareBatch(context.Background(), "INSERT INTO metrics (timestamp, name, value, tags) VALUES (?, ?, ?, ?);")
 	if err != nil {
 		return err
 	}
 
-	stmt, err := txn.Prepare("INSERT INTO metrics (timestamp, name, value, tags) VALUES (?, ?, ?, ?);")
-	if err != nil {
-		return err
-	}
+	rowCount := 0
 
 	for i := range writeReq.Timeseries {
 		timeseries := writeReq.Timeseries[i]
@@ -73,11 +74,13 @@ func (h *RemoteWriteHandler) handleRemoteWrite(writeReq prompb.WriteRequest) err
 		}
 
 		for _, series := range timeseries.Samples {
-			if _, err := stmt.Exec(series.Timestamp/1000, name, series.Value, ch.Map(labels)); err != nil {
+			rowCount += 1
+			if err := batch.Append(series.Timestamp/1000, name, series.Value, labels); err != nil {
 				return err
 			}
 		}
 	}
 
-	return txn.Commit()
+	fmt.Println("Committing transaction with", rowCount, " rows")
+	return batch.Send()
 }

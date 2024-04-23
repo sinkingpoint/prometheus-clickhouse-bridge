@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS metrics (
-    timestamp DateTime CODEC(Delta(4), ZSTD),
+    timestamp DateTime CODEC(DoubleDelta, ZSTD),
     name LowCardinality(String) CODEC(ZSTD),
     tags Map(String, String) CODEC(ZSTD),
     value Float64 CODEC (Gorilla, ZSTD),
