@@ -70,17 +70,39 @@ func (h *RemoteWriteHandler) handleRemoteWrite(writeReq prompb.WriteRequest) err
 		timeseries := writeReq.Timeseries[i]
 		name, labels, err := labelsToJSON(timeseries.Labels)
 		if err != nil {
+			batch.Abort()
 			return err
 		}
 
 		for _, series := range timeseries.Samples {
 			rowCount += 1
 			if err := batch.Append(series.Timestamp/1000, name, series.Value, labels); err != nil {
+				batch.Abort()
 				return err
 			}
+		}
+
+		if rowCount > 1000000 {
+			fmt.Println("Committing transaction with", rowCount, " rows")
+			if err := batch.Send(); err != nil {
+				batch.Abort()
+				return err
+			}
+
+			batch, err = h.clickhouseConn.PrepareBatch(context.Background(), "INSERT INTO metrics (timestamp, name, value, tags) VALUES (?, ?, ?, ?);")
+			if err != nil {
+				return err
+			}
+
+			rowCount = 0
 		}
 	}
 
 	fmt.Println("Committing transaction with", rowCount, " rows")
-	return batch.Send()
+	if err := batch.Send(); err != nil {
+		batch.Abort()
+		return err
+	}
+
+	return nil
 }
