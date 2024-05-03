@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"embed"
-	"io/fs"
+	"io"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
@@ -11,38 +11,23 @@ import (
 //go:embed sql/*.sql
 var sqlTemplates embed.FS
 
-func getProvisionSQLs() ([]string, error) {
-	sqls := []string{}
-	err := fs.WalkDir(sqlTemplates, ".", func(path string, d fs.DirEntry, err error) error {
-		if d.Type().IsRegular() {
-			sql, err := sqlTemplates.ReadFile("sql/" + d.Name())
-			if err != nil {
-				return err
-			}
-
-			sqls = append(sqls, string(sql))
-		}
-
-		return nil
-	})
-
+func getProvisionSQLs(fileName string) ([]byte, error) {
+	file, err := sqlTemplates.Open(fileName)
 	if err != nil {
 		return nil, err
 	}
 
-	return sqls, nil
+	return io.ReadAll(file)
 }
 
-func provision(conn driver.Conn) error {
-	sqls, err := getProvisionSQLs()
+func provision(conn driver.Conn, file string) error {
+	sql, err := getProvisionSQLs(file)
 	if err != nil {
 		return err
 	}
 
-	for _, sql := range sqls {
-		if err := conn.Exec(context.Background(), sql); err != nil {
-			return err
-		}
+	if err := conn.Exec(context.Background(), string(sql)); err != nil {
+		return err
 	}
 
 	return nil
