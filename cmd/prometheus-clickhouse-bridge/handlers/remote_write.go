@@ -43,7 +43,7 @@ func (h *RemoteWriteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func labelsToJSON(labels []prompb.Label) (string, map[string]string, error) {
+func labelsToJSON(labels []prompb.Label) (string, map[string]string) {
 	labelsMap := make(map[string]string)
 	name := ""
 	for _, label := range labels {
@@ -55,11 +55,28 @@ func labelsToJSON(labels []prompb.Label) (string, map[string]string, error) {
 		labelsMap[label.Name] = label.Value
 	}
 
-	return name, labelsMap, nil
+	return name, labelsMap
+}
+
+func labelsToNested(labels []prompb.Label) (string, []string, []string) {
+	keys := make([]string, 0)
+	values := make([]string, 0)
+	name := ""
+	for _, label := range labels {
+		if label.Name == "__name__" {
+			name = label.Value
+			continue
+		}
+
+		keys = append(keys, label.Name)
+		values = append(values, label.Value)
+	}
+
+	return name, keys, values
 }
 
 func (h *RemoteWriteHandler) handleRemoteWrite(writeReq prompb.WriteRequest) error {
-	batch, err := h.clickhouseConn.PrepareBatch(context.Background(), "INSERT INTO metrics (timestamp, name, value, tags) VALUES (?, ?, ?, ?);")
+	batch, err := h.clickhouseConn.PrepareBatch(context.Background(), "INSERT INTO metrics (timestamp, name, value, tags.key, tags.value) VALUES (?, ?, ?, ?);")
 	if err != nil {
 		return err
 	}
@@ -68,15 +85,11 @@ func (h *RemoteWriteHandler) handleRemoteWrite(writeReq prompb.WriteRequest) err
 
 	for i := range writeReq.Timeseries {
 		timeseries := writeReq.Timeseries[i]
-		name, labels, err := labelsToJSON(timeseries.Labels)
-		if err != nil {
-			batch.Abort()
-			return err
-		}
+		name, keys, values := labelsToNested(timeseries.Labels)
 
 		for _, series := range timeseries.Samples {
 			rowCount += 1
-			if err := batch.Append(series.Timestamp/1000, name, series.Value, labels); err != nil {
+			if err := batch.Append(series.Timestamp/1000, name, series.Value, keys, values); err != nil {
 				batch.Abort()
 				return err
 			}
@@ -89,7 +102,7 @@ func (h *RemoteWriteHandler) handleRemoteWrite(writeReq prompb.WriteRequest) err
 				return err
 			}
 
-			batch, err = h.clickhouseConn.PrepareBatch(context.Background(), "INSERT INTO metrics (timestamp, name, value, tags) VALUES (?, ?, ?, ?);")
+			batch, err = h.clickhouseConn.PrepareBatch(context.Background(), "INSERT INTO metrics (timestamp, name, value, tags.key, tags.value) VALUES (?, ?, ?, ?);")
 			if err != nil {
 				return err
 			}
