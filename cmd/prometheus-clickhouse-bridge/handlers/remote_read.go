@@ -18,11 +18,18 @@ import (
 // RemoteReadHandler is an http.Handler that processes RemoteRead requests
 type RemoteReadHandler struct {
 	clickhouseConn driver.Conn
+	optimisers     []Optimiser
 }
 
 func NewRemoteReadHandler(clickhouseConn driver.Conn) *RemoteReadHandler {
 	return &RemoteReadHandler{
 		clickhouseConn: clickhouseConn,
+		optimisers: []Optimiser{
+			&OrOptimiser{},
+			&PrefixOptimiser{},
+			&SuffixOptimiser{},
+			&ContainsOptimiser{},
+		},
 	}
 }
 
@@ -99,6 +106,36 @@ func mapIntoLabelset(input map[string]string) model.LabelSet {
 	return ls
 }
 
+func (h *RemoteReadHandler) parseMatcher(matcher *prompb.LabelMatcher) (string, []interface{}) {
+	key := matcher.Name
+	value := matcher.Value
+
+	if key == "__name__" {
+		key = "name"
+	} else {
+		key = "tags[?]"
+	}
+
+	for _, optimiser := range h.optimisers {
+		if optimiser.Matches(key, matcher.Type, value) {
+			return optimiser.Optimise(key, matcher.Type, value)
+		}
+	}
+
+	switch matcher.Type {
+	case prompb.LabelMatcher_EQ:
+		return fmt.Sprintf("%s = ?", key), []interface{}{value}
+	case prompb.LabelMatcher_NEQ:
+		return fmt.Sprintf("%s != ?", key), []interface{}{value}
+	case prompb.LabelMatcher_RE:
+		return fmt.Sprintf("match(%s, ?)", key), []interface{}{value}
+	case prompb.LabelMatcher_NRE:
+		return fmt.Sprintf("NOT match(%s, ?)", key), []interface{}{value}
+	default:
+		panic("BUG: unhandled label matcher type")
+	}
+}
+
 // handleRemoteRead takes a protobuf ReadRequest and returns a protobuf ReadResponse
 // that can be returned to the client
 func (h *RemoteReadHandler) handleRemoteRead(req prompb.ReadRequest) (*prompb.ReadResponse, error) {
@@ -108,30 +145,9 @@ func (h *RemoteReadHandler) handleRemoteRead(req prompb.ReadRequest) (*prompb.Re
 		wheres := []string{}
 		whereArgs := []interface{}{}
 		for _, matcher := range query.Matchers {
-			key := matcher.Name
-			value := matcher.Value
-
-			if key == "__name__" {
-				key = "name"
-			} else {
-				whereArgs = append(whereArgs, key)
-				key = "tags[?]"
-			}
-
-			switch matcher.Type {
-			case prompb.LabelMatcher_EQ:
-				wheres = append(wheres, fmt.Sprintf("%s = ?", key))
-				whereArgs = append(whereArgs, value)
-			case prompb.LabelMatcher_NEQ:
-				wheres = append(wheres, fmt.Sprintf("%s != ?", key))
-				whereArgs = append(whereArgs, value)
-			case prompb.LabelMatcher_RE:
-				wheres = append(wheres, "match(%s, ?)", key)
-				whereArgs = append(whereArgs, value)
-			case prompb.LabelMatcher_NRE:
-				wheres = append(wheres, "NOT match(%s, ?)", key)
-				whereArgs = append(whereArgs, value)
-			}
+			where, whereArg := h.parseMatcher(matcher)
+			wheres = append(wheres, where)
+			whereArgs = append(whereArgs, whereArg...)
 		}
 
 		wheres = append(wheres, "timestamp >= ? AND timestamp <= ?")
@@ -192,4 +208,84 @@ func (h *RemoteReadHandler) handleRemoteRead(req prompb.ReadRequest) (*prompb.Re
 	return &prompb.ReadResponse{
 		Results: queryResults,
 	}, nil
+}
+
+type Optimiser interface {
+	Matches(key string, op prompb.LabelMatcher_Type, value string) bool
+	Optimise(key string, op prompb.LabelMatcher_Type, value string) (string, []interface{})
+}
+
+type OrOptimiser struct {
+}
+
+func (o *OrOptimiser) Matches(key string, op prompb.LabelMatcher_Type, value string) bool {
+	if op == prompb.LabelMatcher_EQ || op == prompb.LabelMatcher_NEQ {
+		return false
+	}
+
+	ors := strings.Split(value, "|")
+	return len(ors) > 1
+}
+
+func (o *OrOptimiser) Optimise(key string, op prompb.LabelMatcher_Type, value string) (string, []interface{}) {
+	ors := strings.Split(value, "|")
+	where := "("
+	args := []interface{}{}
+	for i, or := range ors {
+		where += fmt.Sprintf("%s = ?", key)
+		args = append(args, or)
+		if i != len(ors)-1 {
+			where += " OR "
+		}
+	}
+	where += ")"
+	return where, args
+}
+
+type PrefixOptimiser struct {
+}
+
+func (o *PrefixOptimiser) Matches(key string, op prompb.LabelMatcher_Type, value string) bool {
+	if op == prompb.LabelMatcher_EQ || op == prompb.LabelMatcher_NEQ {
+		return false
+	}
+
+	return strings.HasSuffix(value, ".*")
+}
+
+func (o *PrefixOptimiser) Optimise(key string, op prompb.LabelMatcher_Type, value string) (string, []interface{}) {
+	prefix := strings.TrimSuffix(value, ".*")
+	return fmt.Sprintf("startsWith(%s, ?)", key), []interface{}{prefix}
+}
+
+type SuffixOptimiser struct {
+}
+
+func (o *SuffixOptimiser) Matches(key string, op prompb.LabelMatcher_Type, value string) bool {
+	if op == prompb.LabelMatcher_EQ || op == prompb.LabelMatcher_NEQ {
+		return false
+	}
+
+	return strings.HasPrefix(value, ".*")
+}
+
+func (o *SuffixOptimiser) Optimise(key string, op prompb.LabelMatcher_Type, value string) (string, []interface{}) {
+	suffix := strings.TrimPrefix(value, ".*")
+	return fmt.Sprintf("endsWith(%s, ?)", key), []interface{}{suffix}
+}
+
+type ContainsOptimiser struct {
+}
+
+func (o *ContainsOptimiser) Matches(key string, op prompb.LabelMatcher_Type, value string) bool {
+	if op == prompb.LabelMatcher_EQ || op == prompb.LabelMatcher_NEQ {
+		return false
+	}
+
+	return strings.HasPrefix(value, ".*") && strings.HasSuffix(value, ".*")
+}
+
+func (o *ContainsOptimiser) Optimise(key string, op prompb.LabelMatcher_Type, value string) (string, []interface{}) {
+	contains := strings.TrimSuffix(strings.TrimPrefix(value, ".*"), ".*")
+	return fmt.Sprintf("hasSubsequence(%s, ?)", key), []interface{}{contains}
 }
